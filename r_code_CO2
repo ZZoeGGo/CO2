@@ -1,0 +1,179 @@
+# CO2
+
+
+
+
+
+```{r}
+co2s<-read.csv("co2.csv")
+co2s$date = strptime(paste(co2s$day, co2s$time), format = "%Y-%m-%d %H:%M",
+tz = "UTC")
+co2s[co2s$quality >= 1, "co2"] = NA
+co2s$date = strptime(paste(co2s$day, co2s$time), format = "%Y-%m-%d %H:%M",
+tz = "UTC")
+# remove low-quality measurements
+co2s[co2s$quality >= 1, "co2"] = NA
+
+timeOrigin = ISOdate(1980, 1, 1, 0, 0, 0, tz = "UTC")
+co2s$days = as.numeric(difftime(co2s$date, timeOrigin,
+units = "days"))
+co2s$cos12 = cos(2 * pi * co2s$days/365.25)
+co2s$sin12 = sin(2 * pi * co2s$days/365.25)
+co2s$cos6 = cos(2 * 2 * pi * co2s$days/365.25)
+co2s$sin6 = sin(2 * 2 * pi * co2s$days/365.25)
+cLm = lm(co2 ~ days + cos12 + sin12 + cos6 + sin6,
+data = co2s)
+summary(cLm)$coef[, 1:2]
+
+newX = data.frame(date = seq(ISOdate(1990, 1, 1, 0,
+0, 0, tz = "UTC"), by = "1 days", length.out = 365 *
+30))
+newX$days = as.numeric(difftime(newX$date, timeOrigin,
+units = "days"))
+newX$cos12 = cos(2 * pi * newX$days/365.25)
+newX$sin12 = sin(2 * pi * newX$days/365.25)
+newX$cos6 = cos(2 * 2 * pi * newX$days/365.25)
+newX$sin6 = sin(2 * 2 * pi * newX$days/365.25)
+coPred = predict(cLm, newX, se.fit = TRUE)
+coPred = data.frame(est = coPred$fit, lower = coPred$fit -
+2 * coPred$se.fit, upper = coPred$fit + 2 * coPred$se.fit)
+
+newX = newX[1:365, ]
+newX$days = 0
+
+
+timeBreaks = seq(min(co2s$date), ISOdate(2025, 1, 1,
+tz = "UTC"), by = "14 days")
+timePoints = timeBreaks[-1]
+co2s$timeRw2 = as.numeric(cut(co2s$date, timeBreaks))
+# derivatives of time random effect
+D = Diagonal(length(timePoints)) - bandSparse(length(timePoints),
+k = -1)
+derivLincomb = inla.make.lincombs(timeRw2 = D[-1, ])
+names(derivLincomb) = gsub("^lc", "time", names(derivLincomb))
+# seasonal effect
+StimeSeason = seq(ISOdate(2009, 9, 1, tz = "UTC"),
+ISOdate(2011, 3, 1, tz = "UTC"), len = 1001)
+StimeYear = as.numeric(difftime(StimeSeason, timeOrigin,
+"days"))/365.35
+seasonLincomb = inla.make.lincombs(sin12 = sin(2 *
+pi * StimeYear), cos12 = cos(2 * pi * StimeYear),
+sin6 = sin(2 * 2 * pi * StimeYear), cos6 = cos(2 *
+2 * pi * StimeYear))
+names(seasonLincomb) = gsub("^lc", "season", names(seasonLincomb))
+# predictions
+StimePred = as.numeric(difftime(timePoints, timeOrigin,
+units = "days"))/365.35
+predLincomb = inla.make.lincombs(timeRw2 = Diagonal(length(timePoints)),
+`(Intercept)` = rep(1, length(timePoints)), sin12 = sin(2 *
+pi * StimePred), cos12 = cos(2 * pi * StimePred),
+sin6 = sin(2 * 2 * pi * StimePred), cos6 = cos(2 *
+2 * pi * StimePred))
+names(predLincomb) = gsub("^lc", "pred", names(predLincomb))
+StimeIndex = seq(1, length(timePoints))
+timeOriginIndex = which.min(abs(difftime(timePoints, timeOrigin)))
+
+co2res = inla(co2 ~ sin12 + cos12 + sin6 + cos6 +
+                f(timeRw2, model = 'rw2',
+                  values = StimeIndex,
+                  prior='pc.prec', param = c(log(1.01)/26, 0.5)),
+              data = co2s, family='gamma', lincomb = c(derivLincomb, seasonLincomb, predLincomb),
+              control.family = list(hyper=list(prec=list(prior='pc.prec', param=c(2, 0.5)))),
+              control.inla = list(strategy='gaussian', int.strategy='eb'),
+              verbose=TRUE)
+```
+
+```{r, echo = FALSE, capture = "Accessing CO2 data with INLA model"}
+matplot(timePoints, exp(co2res$summary.random$timeRw2[,
+c("0.5quant", "0.025quant", "0.975quant")]), type = "l",
+col = "black", lty = c(1, 2, 2), log = "y", xaxt = "n",
+xlab = "time", ylab = "ppm")
+xax = pretty(timePoints)
+axis(1, xax, format(xax, "%Y"))
+derivPred = co2res$summary.lincomb.derived[grep("time",
+rownames(co2res$summary.lincomb.derived)), c("0.5quant",
+"0.025quant", "0.975quant")]
+scaleTo10Years = (10 * 365.25/as.numeric(diff(timePoints,
+units = "days")))
+```
+
+## Appendix
+
+```{r, echo=TRUE, eval=FALSE}
+co2s<-read.csv("co2.csv")
+co2s$date = strptime(paste(co2s$day, co2s$time), format = "%Y-%m-%d %H:%M",
+tz = "UTC")
+co2s[co2s$quality >= 1, "co2"] = NA
+co2s$date = strptime(paste(co2s$day, co2s$time), format = "%Y-%m-%d %H:%M",
+tz = "UTC")
+# remove low-quality measurements
+co2s[co2s$quality >= 1, "co2"] = NA
+
+timeOrigin = ISOdate(1980, 1, 1, 0, 0, 0, tz = "UTC")
+co2s$days = as.numeric(difftime(co2s$date, timeOrigin,
+units = "days"))
+co2s$cos12 = cos(2 * pi * co2s$days/365.25)
+co2s$sin12 = sin(2 * pi * co2s$days/365.25)
+co2s$cos6 = cos(2 * 2 * pi * co2s$days/365.25)
+co2s$sin6 = sin(2 * 2 * pi * co2s$days/365.25)
+cLm = lm(co2 ~ days + cos12 + sin12 + cos6 + sin6,
+data = co2s)
+summary(cLm)$coef[, 1:2]
+
+newX = data.frame(date = seq(ISOdate(1990, 1, 1, 0,
+0, 0, tz = "UTC"), by = "1 days", length.out = 365 *
+30))
+newX$days = as.numeric(difftime(newX$date, timeOrigin,
+units = "days"))
+newX$cos12 = cos(2 * pi * newX$days/365.25)
+newX$sin12 = sin(2 * pi * newX$days/365.25)
+newX$cos6 = cos(2 * 2 * pi * newX$days/365.25)
+newX$sin6 = sin(2 * 2 * pi * newX$days/365.25)
+coPred = predict(cLm, newX, se.fit = TRUE)
+coPred = data.frame(est = coPred$fit, lower = coPred$fit -
+2 * coPred$se.fit, upper = coPred$fit + 2 * coPred$se.fit)
+
+newX = newX[1:365, ]
+newX$days = 0
+
+
+timeBreaks = seq(min(co2s$date), ISOdate(2025, 1, 1,
+tz = "UTC"), by = "14 days")
+timePoints = timeBreaks[-1]
+co2s$timeRw2 = as.numeric(cut(co2s$date, timeBreaks))
+# derivatives of time random effect
+D = Diagonal(length(timePoints)) - bandSparse(length(timePoints),
+k = -1)
+derivLincomb = inla.make.lincombs(timeRw2 = D[-1, ])
+names(derivLincomb) = gsub("^lc", "time", names(derivLincomb))
+# seasonal effect
+StimeSeason = seq(ISOdate(2009, 9, 1, tz = "UTC"),
+ISOdate(2011, 3, 1, tz = "UTC"), len = 1001)
+StimeYear = as.numeric(difftime(StimeSeason, timeOrigin,
+"days"))/365.35
+seasonLincomb = inla.make.lincombs(sin12 = sin(2 *
+pi * StimeYear), cos12 = cos(2 * pi * StimeYear),
+sin6 = sin(2 * 2 * pi * StimeYear), cos6 = cos(2 *
+2 * pi * StimeYear))
+names(seasonLincomb) = gsub("^lc", "season", names(seasonLincomb))
+# predictions
+StimePred = as.numeric(difftime(timePoints, timeOrigin,
+units = "days"))/365.35
+predLincomb = inla.make.lincombs(timeRw2 = Diagonal(length(timePoints)),
+`(Intercept)` = rep(1, length(timePoints)), sin12 = sin(2 *
+pi * StimePred), cos12 = cos(2 * pi * StimePred),
+sin6 = sin(2 * 2 * pi * StimePred), cos6 = cos(2 *
+2 * pi * StimePred))
+names(predLincomb) = gsub("^lc", "pred", names(predLincomb))
+StimeIndex = seq(1, length(timePoints))
+timeOriginIndex = which.min(abs(difftime(timePoints, timeOrigin)))
+
+co2res = inla(co2 ~ sin12 + cos12 + sin6 + cos6 +
+                f(timeRw2, model = 'rw2',
+                  values = StimeIndex,
+                  prior='pc.prec', param = c(log(1.01)/26, 0.5)),
+              data = co2s, family='gamma', lincomb = c(derivLincomb, seasonLincomb, predLincomb),
+              control.family = list(hyper=list(prec=list(prior='pc.prec', param=c(2, 0.5)))),
+              control.inla = list(strategy='gaussian', int.strategy='eb'),
+              verbose=TRUE)
+```
